@@ -23,8 +23,10 @@ gesture_stability_threshold = 0.5  # Gesture must persist for 0.5 seconds to be 
 
 # Cursor position
 cursor_x, cursor_y = 0, 0
-drawing_enabled = False
+drawing_enabled = True  # Initially, drawing is enabled
 previous_point = None
+last_stop_time = 0  # Time of the last "Stop" gesture
+message_timer = None  # Timer for message disappearance
 
 # Gesture detection functions
 def detect_thumbs_up_pose(landmarks):
@@ -117,6 +119,24 @@ drawing_canvases = [tk.Canvas(frame_left, width=400, height=400, bg="white") for
 current_canvas = drawing_canvases[selected_item_index]
 current_canvas.pack()
 
+# Status and message section
+status_frame = tk.Frame(frame_left, bg="white")
+status_frame.pack()
+
+status_canvas = tk.Canvas(status_frame, width=50, height=50, bg="white", highlightthickness=0)
+status_canvas.grid(row=0, column=0)
+
+message_label = tk.Label(status_frame, text="", font=("Arial", 14), bg="white", fg="red")
+message_label.grid(row=0, column=1, padx=10)
+
+def update_status_indicator():
+    status_canvas.delete("all")
+    color = "green" if drawing_enabled else "red"
+    status_canvas.create_oval(5, 5, 45, 45, fill=color, outline="")
+    status_canvas.create_text(25, 60, text="Enabled" if drawing_enabled else "Disabled", font=("Arial", 8), fill="black")
+
+update_status_indicator()
+
 # Cursor label
 cursor_label = tk.Label(frame_left, text="◉", font=("Arial", 18), fg="red", bg="white")
 cursor_label.place_forget()  # Initially hidden
@@ -164,18 +184,23 @@ def previous_item_action():
 
 def clear_drawing_canvas():
     current_canvas.delete("all")
-    print("Drawing canvas cleared.")
+    show_message("Drawing canvas cleared!")
 
-def stop_action():
-    global paused
-    if not paused:
-        gesture_label.config(text="Action: Paused!")
-        print("Paused gesture detection!")
-        paused = True
-    else:
-        gesture_label.config(text="Action: Resumed!")
-        print("Resumed gesture detection!")
-        paused = False
+def toggle_drawing():
+    global drawing_enabled, last_stop_time
+    current_time = time.time()
+    if current_time - last_stop_time > 2:  # 2-second delay
+        drawing_enabled = not drawing_enabled
+        update_status_indicator()
+        show_message(f"Drawing {'enabled' if drawing_enabled else 'disabled'}!")
+        last_stop_time = current_time
+
+def show_message(message):
+    global message_timer
+    message_label.config(text=message)
+    if message_timer is not None:
+        root.after_cancel(message_timer)
+    message_timer = root.after(2000, lambda: message_label.config(text=""))
 
 # Buttons linked to gestures
 button_frame = tk.Frame(frame_right, bg="lightgray")
@@ -191,7 +216,7 @@ button_2.grid(row=1, column=0, pady=10)
 button_3 = tk.Button(button_frame, text="Clear Drawing (Rock Sign)", command=clear_drawing_canvas, width=20, height=2)
 button_3.grid(row=2, column=0, pady=10)
 
-stop_button = tk.Button(button_frame, text="Pause/Resume (Stop)", command=stop_action, width=20, height=2)
+stop_button = tk.Button(button_frame, text="Pause/Resume (Stop)", command=toggle_drawing, width=20, height=2)
 stop_button.grid(row=3, column=0, pady=10)
 
 # Initialize video capture
@@ -222,8 +247,8 @@ def update_video_feed():
                     cursor_label.lift()  # Ensure the cursor stays on top
                     detected_gesture = "Point"
 
-                    # Draw on the current canvas
-                    if previous_point is not None:
+                    # Draw on the current canvas only if drawing is enabled
+                    if drawing_enabled and previous_point is not None:
                         current_canvas.create_line(previous_point[0], previous_point[1], cursor_x, cursor_y, fill="black", width=2)
                     previous_point = (cursor_x, cursor_y)
                 else:
@@ -238,6 +263,7 @@ def update_video_feed():
                     clear_drawing_canvas()
                     detected_gesture = "Rock Sign"
                 elif detect_stop(hand_landmarks.landmark):
+                    toggle_drawing()
                     detected_gesture = "Stop"
 
             # Check gesture stability
