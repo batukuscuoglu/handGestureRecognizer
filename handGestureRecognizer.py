@@ -17,10 +17,14 @@ paused = False
 selected_item_index = 0
 last_gesture = None
 last_gesture_time = 0
+hover_start_time = None
+hover_target = None
 gesture_stability_threshold = 0.5  # Gesture must persist for 0.5 seconds to be recognized
 
 # Cursor position
 cursor_x, cursor_y = 0, 0
+drawing_enabled = False
+previous_point = None
 
 # Gesture detection functions
 def detect_thumbs_up_pose(landmarks):
@@ -77,7 +81,7 @@ def detect_pointing(landmarks):
     other_finger_mcps = [landmarks[9], landmarks[13], landmarks[17]]
 
     index_extended = index_tip.y < index_mcp.y
-    others_curled = all(tip.y > mcp.y for tip, mcp in zip(other_finger_tips, other_finger_mcps))
+    others_curled = all(tip.y > mcp.y + 0.02 for tip, mcp in zip(other_finger_tips, other_finger_mcps))  # Added tolerance
     return index_extended and others_curled
 
 def detect_stop(landmarks):
@@ -105,12 +109,20 @@ frame_right = tk.Frame(root, width=400, height=600, bg="lightgray")
 frame_right.grid(row=0, column=1, padx=10, pady=10)
 
 # Canvas for displaying the video feed
-canvas = tk.Canvas(frame_left, width=800, height=600)
-canvas.pack()
+video_canvas = tk.Canvas(frame_left, width=800, height=400)
+video_canvas.pack()
+
+# Square drawing area
+drawing_canvases = [tk.Canvas(frame_left, width=400, height=400, bg="white") for _ in range(10)]
+current_canvas = drawing_canvases[selected_item_index]
+current_canvas.pack()
 
 # Cursor label
-cursor_label = tk.Label(canvas, text="◉", font=("Arial", 18), fg="red", bg="black")
+cursor_label = tk.Label(frame_left, text="◉", font=("Arial", 18), fg="red", bg="white")
 cursor_label.place_forget()  # Initially hidden
+
+# Ensure cursor is always on top
+cursor_label.lift()
 
 # Label to display the current detected gesture
 gesture_label = tk.Label(frame_right, text="Gesture: No Gesture", font=("Arial", 16), bg="white", height=2)
@@ -125,31 +137,34 @@ listbox.pack(pady=20)
 listbox.selection_set(selected_item_index)
 
 # Define actions
+def switch_to_item(index):
+    global current_canvas
+    current_canvas.pack_forget()
+    current_canvas = drawing_canvases[index]
+    current_canvas.pack()
+
 def refresh_action():
-    global selected_item_index
-    gesture_label.config(text="Action: List Reset!")
-    print("Resetting list to the top.")
-    selected_item_index = 0
-    listbox.selection_clear(0, tk.END)
-    listbox.selection_set(selected_item_index)
+    switch_to_item(selected_item_index)
 
 def next_item_action():
     global selected_item_index
     if selected_item_index < len(item_list) - 1:
         selected_item_index += 1
-        gesture_label.config(text=f"Action: Moved to {item_list[selected_item_index]}")
-        print(f"Moved to {item_list[selected_item_index]}")
         listbox.selection_clear(0, tk.END)
         listbox.selection_set(selected_item_index)
+        switch_to_item(selected_item_index)
 
 def previous_item_action():
     global selected_item_index
     if selected_item_index > 0:
         selected_item_index -= 1
-        gesture_label.config(text=f"Action: Moved to {item_list[selected_item_index]}")
-        print(f"Moved to {item_list[selected_item_index]}")
         listbox.selection_clear(0, tk.END)
         listbox.selection_set(selected_item_index)
+        switch_to_item(selected_item_index)
+
+def clear_drawing_canvas():
+    current_canvas.delete("all")
+    print("Drawing canvas cleared.")
 
 def stop_action():
     global paused
@@ -173,7 +188,7 @@ button_1.grid(row=0, column=0, pady=10)
 button_2 = tk.Button(button_frame, text="Next Item (Thumbs Down)", command=next_item_action, width=20, height=2)
 button_2.grid(row=1, column=0, pady=10)
 
-button_3 = tk.Button(button_frame, text="Refresh (Rock Sign)", command=refresh_action, width=20, height=2)
+button_3 = tk.Button(button_frame, text="Clear Drawing (Rock Sign)", command=clear_drawing_canvas, width=20, height=2)
 button_3.grid(row=2, column=0, pady=10)
 
 stop_button = tk.Button(button_frame, text="Pause/Resume (Stop)", command=stop_action, width=20, height=2)
@@ -184,7 +199,7 @@ cap = cv2.VideoCapture(0)
 
 # Process the video feed and update the GUI
 def update_video_feed():
-    global current_gesture, last_gesture, last_gesture_time, paused, cursor_x, cursor_y
+    global current_gesture, last_gesture, last_gesture_time, paused, cursor_x, cursor_y, hover_start_time, hover_target, previous_point
     ret, frame = cap.read()
     if not ret:
         return
@@ -201,22 +216,28 @@ def update_video_feed():
 
                 if detect_pointing(hand_landmarks.landmark):
                     index_tip = hand_landmarks.landmark[8]
-                    cursor_x = int(index_tip.x * canvas.winfo_width())
-                    cursor_y = int(index_tip.y * canvas.winfo_height())
-                    cursor_label.place(x=cursor_x, y=cursor_y)
+                    cursor_x = int((1 - index_tip.x) * current_canvas.winfo_width())  # Corrected X-axis mapping
+                    cursor_y = int(index_tip.y * current_canvas.winfo_height())
+                    cursor_label.place(x=cursor_x, y=cursor_y + 400)
+                    cursor_label.lift()  # Ensure the cursor stays on top
                     detected_gesture = "Point"
 
-                elif detect_thumbs_up_pose(hand_landmarks.landmark):
+                    # Draw on the current canvas
+                    if previous_point is not None:
+                        current_canvas.create_line(previous_point[0], previous_point[1], cursor_x, cursor_y, fill="black", width=2)
+                    previous_point = (cursor_x, cursor_y)
+                else:
+                    previous_point = None
                     cursor_label.place_forget()
+
+                if detect_thumbs_up_pose(hand_landmarks.landmark):
                     detected_gesture = "Thumbs Up"
                 elif detect_thumbs_down_pose(hand_landmarks.landmark):
-                    cursor_label.place_forget()
                     detected_gesture = "Thumbs Down"
                 elif detect_rock_sign(hand_landmarks.landmark):
-                    cursor_label.place_forget()
+                    clear_drawing_canvas()
                     detected_gesture = "Rock Sign"
                 elif detect_stop(hand_landmarks.landmark):
-                    cursor_label.place_forget()
                     detected_gesture = "Stop"
 
             # Check gesture stability
@@ -229,27 +250,26 @@ def update_video_feed():
                         previous_item_action()
                     elif current_gesture == "Thumbs Down":
                         next_item_action()
-                    elif current_gesture == "Rock Sign":
-                        refresh_action()
-                    elif current_gesture == "Stop":
-                        stop_action()
             else:
                 last_gesture = detected_gesture
                 last_gesture_time = time.time()
         else:
             current_gesture = "No Gesture"
+            previous_point = None  # Reset previous point if no hand is detected
+            cursor_label.place_forget()
 
         # Update the gesture label
         gesture_label.config(text=f"Gesture: {current_gesture}")
 
     else:
         gesture_label.config(text="Gesture: Paused")
+        previous_point = None  # Reset previous point if paused
 
     # Convert the frame to ImageTk for displaying in Tkinter
     img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     imgtk = ImageTk.PhotoImage(image=img)
-    canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
-    canvas.imgtk = imgtk
+    video_canvas.create_image(0, 0, anchor=tk.NW, image=imgtk)
+    video_canvas.imgtk = imgtk
 
     # Call this function again after 10ms
     root.after(10, update_video_feed)
